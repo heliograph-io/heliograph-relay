@@ -547,7 +547,7 @@ that hashes itself. Nothing here is signed yet. So the honest sentence today is
 it is serving that number", not "the relay is provably the source you read".
 
 The whole account, including the CLI's side of it, is at
-[heliograph.dbhq.uk/provenance](https://heliograph.dbhq.uk/provenance).
+[docs.heliograph.io/provenance](https://docs.heliograph.io/provenance).
 
 ## Storage
 
