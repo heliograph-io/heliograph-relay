@@ -136,7 +136,6 @@ func main() {
 	wrap := func(a relay.Authoriser) relay.Authoriser {
 		if hosted {
 			log.Info("hosted tenant: estate-wide credentials are refused, because one estate may hold several customers")
-			a = relay.Hosted{Inner: a}
 		}
 		// Leases are recognised whether or not this relay can verify one.
 		//
@@ -146,7 +145,7 @@ func main() {
 		// a fault that was ours. So the lease is read, and refused for the
 		// reason it was actually refused for.
 		//
-		leases := &relay.AuthorityAuth{Inner: a}
+		var verify relay.AuthorityVerifier
 		if key := strings.TrimSpace(os.Getenv("HELIOGRAPH_RELAY_LEASE_KEY")); key != "" {
 			pub, err := relay.ParseEd25519PublicKey(key)
 			if err != nil {
@@ -157,7 +156,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "heliograph-relay: HELIOGRAPH_RELAY_LEASE_KEY: %v\n", err)
 				os.Exit(2)
 			}
-			leases.Verify = relay.Ed25519Verifier(pub)
+			verify = relay.Ed25519Verifier(pub)
 			// The key itself, because it is public and an operator has to be
 			// able to say which one this relay trusts without asking anybody.
 			log.Info("authorisation leases are verified against a configured Ed25519 public key",
@@ -166,7 +165,7 @@ func main() {
 			log.Info("authorisation leases are recognised and refused: no verification key is configured, so every lease fails closed",
 				"maximumLeaseLife", relay.MaxAuthorityLife.String())
 		}
-		return leases
+		return relay.WithLeases(a, verify, hosted)
 	}
 
 	if stations != "" {

@@ -177,8 +177,21 @@ const (
 //
 //	hl1.<base64url(payload)>.<base64url(signature)>
 func Lease(sign func(payload string) []byte, estate string, stations, read, write []string, notBefore, expires time.Time, epoch int64) string {
+	return lease(sign, estate, stations, false, read, write, notBefore, expires, epoch)
+}
+
+// estateWideLease is a lease that says it covers every station in an estate,
+// which is what a hosted tenant must refuse.
+func estateWideLease(sign func(payload string) []byte, estate string, read, write []string, notBefore, expires time.Time) string {
+	return lease(sign, estate, nil, true, read, write, notBefore, expires, 0)
+}
+
+func lease(sign func(payload string) []byte, estate string, stations []string, all bool, read, write []string, notBefore, expires time.Time, epoch int64) string {
 	payload := map[string]any{
 		"e": estate, "nbf": notBefore.Unix(), "exp": expires.Unix(),
+	}
+	if all {
+		payload["a"] = true
 	}
 	if len(stations) > 0 {
 		payload["s"] = stations
@@ -715,6 +728,36 @@ func Run(t Target) []Result {
 		}
 	} else {
 		ok("SKIPPED: the signed-lease section needs a signing key this harness did not supply",
+			true, "")
+	}
+
+	// --- a hosted tenant and an estate-wide lease ---------------------------
+	// A lease is a credential, so a hosted tenant refuses one that covers every
+	// station in an estate, exactly as it refuses an estate-wide token. Both
+	// implementations once answered a valid lease before the tenant rule was
+	// applied, and this section is what holds them to the same answer.
+	if t.Tenancy && t.SignLease != nil {
+		now := time.Now()
+		wide := estateWideLease(t.SignLease, TenantEstate,
+			[]string{"c2s"}, []string{"s2c"}, now.Add(-time.Minute), now.Add(10*time.Minute))
+		code, why, _ := t.putR(TenantEstate, TenantAlpha, "s2c", wide, 1, []byte("x"))
+		ok("a hosted tenant refuses a lease covering every station in an estate", code != 202,
+			fmt.Sprintf("got %d", code))
+		ok("and says estate-wide is why, rather than blaming the lease",
+			why.Reason == "estate-wide-credential", fmt.Sprintf("reason=%q", why.Reason))
+		code, _, _ = t.take(TenantEstate, TenantAlpha, "c2s", wide)
+		ok("an estate-wide lease cannot collect from a hosted tenant either", code != 200,
+			fmt.Sprintf("got %d", code))
+
+		// And a lease naming its station still works, or the refusal above
+		// proves only that leasing is broken under hosting.
+		scoped := Lease(t.SignLease, TenantEstate, []string{TenantAlpha},
+			[]string{"c2s"}, []string{"s2c"}, now.Add(-time.Minute), now.Add(10*time.Minute), 0)
+		code, why, _ = t.putR(TenantEstate, TenantAlpha, "s2c", scoped, 1, []byte("alpha's status"))
+		ok("a hosted tenant still honours a lease scoped to named stations", code == 202,
+			fmt.Sprintf("got %d %q", code, why.Reason))
+	} else {
+		ok("SKIPPED: the hosted-lease section needs a tenancy and a signing key this harness did not both supply",
 			true, "")
 	}
 

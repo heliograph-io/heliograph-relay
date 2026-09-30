@@ -834,14 +834,18 @@ async function admitAuthority(env: Env, d: DecisionRequest): Promise<Grant> {
 }
 
 async function admit(env: Env, d: DecisionRequest): Promise<Grant> {
+  // The tenant rule applies to every grant, a lease's included. A lease is a
+  // credential, and a hosted tenant refuses any credential not scoped to named
+  // stations. hosted() passes a refusal through unchanged, so this refuses more
+  // grants without changing why any lease is refused.
+  const apply = truthy(env.HELIOGRAPH_RELAY_HOSTED) ? hosted : (g: Grant) => g;
   if (looksLikeAuthority(d.credential)) {
     const g = await admitAuthority(env, d);
     // A lease used outside itself is a request for MORE authority, and more
     // authority comes from the control plane or from nowhere. Everything else
     // about a lease is answered here, with no network call.
-    if (g.allow || g.reason !== "out-of-scope") return g;
+    if (g.allow || g.reason !== "out-of-scope") return apply(g);
   }
-  const apply = truthy(env.HELIOGRAPH_RELAY_HOSTED) ? hosted : (g: Grant) => g;
   const stations = (env.HELIOGRAPH_RELAY_STATIONS ?? "").trim();
   if (stations) return apply(admitScoped(stations, d));
   const url = env.HELIOGRAPH_RELAY_AUTHORISER;
