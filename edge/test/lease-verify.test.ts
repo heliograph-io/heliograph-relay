@@ -60,6 +60,7 @@ async function signingKey(): Promise<CryptoKey> {
 interface LeaseFields {
   estate?: string;
   stations?: string[];
+  allStations?: boolean;
   read?: string[];
   write?: string[];
   nbfMs?: number;
@@ -77,6 +78,7 @@ async function lease(f: LeaseFields = {}): Promise<string> {
     nbf: Math.floor((f.nbfMs ?? now - 60_000) / 1000),
     exp: Math.floor((f.expMs ?? now + 10 * 60_000) / 1000),
   };
+  if (f.allStations) payload.a = true;
   const body = b64url(new TextEncoder().encode(JSON.stringify(payload)));
   if (f.sign === false) {
     return `hl1.${body}.${b64url(new Uint8Array(64))}`;
@@ -225,5 +227,50 @@ describe("a signed lease still has to be in date", () => {
       verifying,
     );
     expect(r.reason).toBe("authority-expired");
+  });
+});
+
+/**
+ * A hosted tenant refuses an estate-wide lease, as it refuses an estate-wide
+ * credential.
+ *
+ * HELIOGRAPH_RELAY_HOSTED promises to refuse any credential not scoped to named
+ * stations, and a lease is a credential. The lease path used to answer before
+ * the tenant rule was applied, so a valid lease saying allStations was admitted
+ * by a relay that had been told one estate may hold several customers.
+ *
+ * authlease_test.go is the Go half of the same pair.
+ */
+describe("a hosted tenant and a lease", () => {
+  const hostedVerifying = { ...verifying, HELIOGRAPH_RELAY_HOSTED: "1" };
+
+  it("refuses a lease covering every station in the estate, and says why", async () => {
+    const wide = await lease({ stations: [], allStations: true });
+    const r = await call("POST", `${ESTATE}/${STATION}/s2c`, wide, hostedVerifying);
+    expect(r.status).toBe(401);
+    expect(r.reason).toBe("estate-wide-credential");
+  });
+
+  it("does not let an estate-wide lease collect either", async () => {
+    const wide = await lease({ stations: [], allStations: true });
+    const r = await call("GET", `${ESTATE}/${STATION}/c2s`, wide, hostedVerifying);
+    expect(r.status).not.toBe(200);
+    expect(r.reason).toBe("estate-wide-credential");
+  });
+
+  // Or the refusal above proves only that leasing is broken under hosting.
+  it("still honours a lease scoped to named stations", async () => {
+    const r = await call("POST", `${ESTATE}/${STATION}/s2c`, await lease(), hostedVerifying);
+    expect(r.status).toBe(202);
+  });
+
+  // Hosting changes which grants are refused, never why a lease was refused.
+  it("keeps the reason a lease was refused for", async () => {
+    const now = Date.now();
+    const expired = await lease({ nbfMs: now - 20 * 60_000, expMs: now - 10 * 60_000 });
+    let r = await call("POST", `${ESTATE}/${STATION}/s2c`, expired, hostedVerifying);
+    expect(r.reason).toBe("authority-expired");
+    r = await call("POST", `${ESTATE}/${STATION}/s2c`, await lease({ sign: false }), hostedVerifying);
+    expect(r.reason).toBe("authority-unverifiable");
   });
 });

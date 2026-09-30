@@ -532,6 +532,84 @@ func TestSomethingThatIsNotALeaseFallsThroughToTheAuthoriser(t *testing.T) {
 	}
 }
 
+// A hosted tenant refuses an estate-wide lease, as it refuses an estate-wide
+// credential.
+//
+// HELIOGRAPH_RELAY_HOSTED promises to refuse any credential not scoped to named
+// stations, and a lease is a credential. The lease path used to answer before
+// the tenant rule was applied, so a valid lease saying allStations was admitted
+// by a relay that had been told one estate may hold several customers.
+//
+// Built with WithLeases, the composition main.go serves with, so this is the
+// order the binary runs rather than an order a test chose.
+func TestAHostedTenantRefusesAnEstateWideLease(t *testing.T) {
+	m := &minter{secret: "s1"}
+	srv := scopedServer(t, WithLeases(&refusesEverything{reason: ReasonBadCredential},
+		stubVerify("s1"), true))
+
+	wide := Scope{
+		Estate: "e-9f3c1a", AllStations: true,
+		Read: []string{"c2s"}, Write: []string{"s2c"},
+	}
+	lease := m.mint(wide, time.Now().Add(-time.Minute), time.Now().Add(10*time.Minute))
+
+	r := put(t, srv, "/v1/e-9f3c1a/pump-01/s2c", lease, 1, []byte("status"))
+	if r.StatusCode == 202 {
+		t.Fatal("a hosted tenant accepted a lease covering every station in the estate")
+	}
+	if got := reasonOf(t, r); got != string(ReasonEstateWide) {
+		t.Errorf("refused as %q, want %q", got, ReasonEstateWide)
+	}
+	if r.StatusCode != 401 {
+		t.Errorf("got %d, want 401", r.StatusCode)
+	}
+	if r := do(t, srv, "GET", "/v1/e-9f3c1a/pump-01/c2s?wait=0", lease, nil); r.StatusCode == 200 {
+		t.Error("a hosted tenant let an estate-wide lease collect")
+	}
+}
+
+// And a hosted tenant still honours a lease scoped to named stations, or the
+// test above proves only that leasing is broken under hosting.
+func TestAHostedTenantHonoursAStationScopedLease(t *testing.T) {
+	m := &minter{secret: "s1"}
+	srv := scopedServer(t, WithLeases(&refusesEverything{reason: ReasonBadCredential},
+		stubVerify("s1"), true))
+	lease := m.mint(alphaScope(), time.Now().Add(-time.Minute), time.Now().Add(10*time.Minute))
+
+	if r := put(t, srv, "/v1/e-9f3c1a/pump-01/s2c", lease, 1, []byte("status")); r.StatusCode != 202 {
+		t.Fatalf("a hosted tenant refused a station-scoped lease: %d %q", r.StatusCode, reasonOf(t, r))
+	}
+	if r := do(t, srv, "GET", "/v1/e-9f3c1a/pump-01/c2s?wait=0", lease, nil); r.StatusCode != 200 {
+		t.Errorf("a station-scoped lease could not collect under a hosted tenant: %d", r.StatusCode)
+	}
+}
+
+// Hosting changes which grants are refused, never why a lease was refused.
+//
+// A lease refused for its signature or its window says so under a hosted
+// tenant exactly as it does anywhere else, because an operator reading
+// "estate-wide-credential" for an expired lease would go looking at scope.
+func TestAHostedTenantKeepsALeaseRefusalReason(t *testing.T) {
+	m := &minter{secret: "s1"}
+	now := time.Now()
+	for name, c := range map[string]struct {
+		lease string
+		want  Reason
+	}{
+		"expired": {m.mint(alphaScope(), now.Add(-20*time.Minute), now.Add(-10*time.Minute)),
+			ReasonAuthorityExpired},
+		"signed by somebody else": {(&minter{secret: "s2"}).mint(alphaScope(),
+			now.Add(-time.Minute), now.Add(10*time.Minute)), ReasonAuthorityUnverifiable},
+	} {
+		srv := scopedServer(t, WithLeases(&refusesEverything{reason: ReasonBadCredential},
+			stubVerify("s1"), true))
+		r := put(t, srv, "/v1/e-9f3c1a/pump-01/s2c", c.lease, 1, []byte("x"))
+		if got := reasonOf(t, r); got != string(c.want) {
+			t.Errorf("%s: refused as %q, want %q", name, got, c.want)
+		}
+	}
+}
+
 func TestAnAuthorityRoundTripsThroughItsEncoding(t *testing.T) {
 	want := Authority{
 		Scope:     alphaScope(),

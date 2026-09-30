@@ -345,6 +345,29 @@ func (a *AuthorityAuth) Admit(ctx context.Context, req Request) Grant {
 	return a.Inner.Admit(ctx, req)
 }
 
+// WithLeases is the authoriser a relay serves with: lease recognition over
+// inner, and, for a hosted tenant, the tenant rule.
+//
+// It is here rather than in main.go so that the order the binary composes them
+// in is the order the tests exercise.
+//
+// Leases are recognised whether or not this relay can verify one. A nil verify
+// refuses every lease, for the reason it was refused.
+//
+// THE TENANT RULE WRAPS THE LEASE CHECK, NOT THE OTHER WAY ROUND. A lease is a
+// credential, and HELIOGRAPH_RELAY_HOSTED refuses any credential not scoped to
+// named stations. With Hosted inside, AuthorityAuth answered an allowed lease
+// without consulting Inner, so an estate-wide lease never met the rule. Hosted
+// passes every refusal through unchanged, so wrapping it outside refuses more
+// grants without changing why any lease is refused.
+func WithLeases(inner Authoriser, verify AuthorityVerifier, hosted bool) Authoriser {
+	var a Authoriser = &AuthorityAuth{Inner: inner, Verify: verify}
+	if hosted {
+		a = Hosted{Inner: a}
+	}
+	return a
+}
+
 // watchKey identifies the polls held under one estate. The NUL keeps an estate
 // named "a" from matching one named "ab".
 func watchKey(estate, station, dir string) string {

@@ -71,9 +71,11 @@ func TestTheGoServerPassesTheContractBehindARemoteAuthoriser(t *testing.T) {
 
 	// Hosted, because the per-station isolation section needs a relay that
 	// refuses estate-wide credentials, and because that is the configuration
-	// the hosted service actually runs.
+	// the hosted service actually runs. WithLeases is the composition main.go
+	// serves with, so this pass runs the binary's order rather than one chosen
+	// here.
 	srv := httptest.NewServer(relay.NewAuthorisingServer(relay.NewStore(),
-		&relay.AuthorityAuth{Inner: relay.Hosted{Inner: auth}, Verify: contractVerifier(t)},
+		relay.WithLeases(auth, contractVerifier(t), true),
 		slog.New(slog.NewTextHandler(io.Discard, nil))).Routes())
 	t.Cleanup(srv.Close)
 
